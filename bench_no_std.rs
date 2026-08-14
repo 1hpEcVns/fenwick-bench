@@ -444,11 +444,11 @@ fn bit_bisect(bit: &[u64], n: usize, top: usize, k: u64) -> usize {
 fn run_mixed_brute<O: Semi>(a: &mut [u64], pos: &[usize], delta: &[u64], is_q: &[u8]) -> u64 {
     let mut acc = 0u64;
     for i in 0..pos.len() {
-        let p = pos[i];
-        if is_q[i] != 0 {
+        let p = unsafe { *pos.get_unchecked(i) }; // i < pos.len()
+        if unsafe { *is_q.get_unchecked(i) } != 0 {
             acc = acc.wrapping_add(brute_prefix::<O>(a, p));
         } else {
-            brute_update::<O>(a, p, delta[i]);
+            brute_update::<O>(a, p, unsafe { *delta.get_unchecked(i) });
         }
     }
     acc
@@ -458,11 +458,11 @@ fn run_mixed_brute<O: Semi>(a: &mut [u64], pos: &[usize], delta: &[u64], is_q: &
 fn run_mixed_bit<O: Semi>(bit: &mut [u64], n: usize, pos: &[usize], delta: &[u64], is_q: &[u8]) -> u64 {
     let mut acc = 0u64;
     for i in 0..pos.len() {
-        let p = pos[i];
-        if is_q[i] != 0 {
+        let p = unsafe { *pos.get_unchecked(i) };
+        if unsafe { *is_q.get_unchecked(i) } != 0 {
             acc = acc.wrapping_add(bit_prefix::<O>(bit, p));
         } else {
-            bit_apply::<O>(bit, n, p, delta[i]);
+            bit_apply::<O>(bit, n, p, unsafe { *delta.get_unchecked(i) });
         }
     }
     acc
@@ -514,12 +514,12 @@ fn run_range_bit<O: Semi>(bit: &[u64], ls: &[usize], len: usize) -> u64 {
 fn run_bisect_mixed_brute(a: &mut [u64], n: usize, pos: &[usize], delta: &[u64], is_q: &[u8], ks: &[u64]) -> u64 {
     let mut acc = 0u64;
     for i in 0..pos.len() {
-        if is_q[i] != 0 {
-            acc = acc.wrapping_add(brute_bisect(a, n, ks[i]) as u64);
+        if unsafe { *is_q.get_unchecked(i) } != 0 {
+            acc = acc.wrapping_add(brute_bisect(a, n, unsafe { *ks.get_unchecked(i) }) as u64);
         } else {
-            let p = pos[i];
+            let p = unsafe { *pos.get_unchecked(i) };
             let slot = unsafe { a.get_unchecked_mut(p) };
-            *slot = slot.wrapping_add(delta[i]);
+            *slot = slot.wrapping_add(unsafe { *delta.get_unchecked(i) });
         }
     }
     acc
@@ -529,10 +529,11 @@ fn run_bisect_mixed_brute(a: &mut [u64], n: usize, pos: &[usize], delta: &[u64],
 fn run_bisect_mixed_bit(bit: &mut [u64], n: usize, top: usize, pos: &[usize], delta: &[u64], is_q: &[u8], ks: &[u64]) -> u64 {
     let mut acc = 0u64;
     for i in 0..pos.len() {
-        if is_q[i] != 0 {
-            acc = acc.wrapping_add(bit_bisect(bit, n, top, ks[i]) as u64);
+        if unsafe { *is_q.get_unchecked(i) } != 0 {
+            acc = acc.wrapping_add(bit_bisect(bit, n, top, unsafe { *ks.get_unchecked(i) }) as u64);
         } else {
-            bit_apply::<Sum>(bit, n, pos[i], delta[i]);
+            bit_apply::<Sum>(bit, n, unsafe { *pos.get_unchecked(i) },
+                             unsafe { *delta.get_unchecked(i) });
         }
     }
     acc
@@ -609,12 +610,12 @@ fn run_query_bit_u32(bit: &[u32], pos: &[usize]) -> u64 {
 fn run_mixed_brute_u32(a: &mut [u32], pos: &[usize], delta: &[u64], is_q: &[u8]) -> u64 {
     let mut acc = 0u64;
     for i in 0..pos.len() {
-        let p = pos[i];
-        if is_q[i] != 0 {
+        let p = unsafe { *pos.get_unchecked(i) };
+        if unsafe { *is_q.get_unchecked(i) } != 0 {
             acc = acc.wrapping_add(brute_prefix_u32(a, p) as u64);
         } else {
             let slot = unsafe { a.get_unchecked_mut(p) };
-            *slot = slot.wrapping_add(delta[i] as u32);
+            *slot = slot.wrapping_add(unsafe { *delta.get_unchecked(i) } as u32);
         }
     }
     acc
@@ -624,11 +625,11 @@ fn run_mixed_brute_u32(a: &mut [u32], pos: &[usize], delta: &[u64], is_q: &[u8])
 fn run_mixed_bit_u32(bit: &mut [u32], n: usize, pos: &[usize], delta: &[u64], is_q: &[u8]) -> u64 {
     let mut acc = 0u64;
     for i in 0..pos.len() {
-        let p = pos[i];
-        if is_q[i] != 0 {
+        let p = unsafe { *pos.get_unchecked(i) };
+        if unsafe { *is_q.get_unchecked(i) } != 0 {
             acc = acc.wrapping_add(bit_prefix_u32(bit, p) as u64);
         } else {
-            bit_apply_u32(bit, n, p, delta[i] as u32);
+            bit_apply_u32(bit, n, p, unsafe { *delta.get_unchecked(i) } as u32);
         }
     }
     acc
@@ -798,32 +799,32 @@ fn median(v: &[f64]) -> f64 {
     let mut a = [0f64; ROUNDS];
     a.copy_from_slice(v);
     for i in 1..a.len() {
-        let x = a[i];
+        let x = unsafe { *a.get_unchecked(i) }; // i < a.len()
         let mut j = i;
-        while j > 0 && a[j - 1] > x {
-            a[j] = a[j - 1];
+        while j > 0 && unsafe { *a.get_unchecked(j - 1) } > x {
+            *unsafe { a.get_unchecked_mut(j) } = unsafe { *a.get_unchecked(j - 1) };
             j -= 1;
         }
-        a[j] = x;
+        *unsafe { a.get_unchecked_mut(j) } = x;
     }
-    a[a.len() / 2]
+    unsafe { *a.get_unchecked(a.len() / 2) }
 }
 
 fn gen_ops(pos: &mut [usize], delta: &mut [u64], is_q: &mut [u8], n: usize, mix: Mix, seed: &mut u64) {
     for i in 0..pos.len() {
-        pos[i] = gen_pos(mix, n, seed);
-        delta[i] = rng_next(seed) % 1024;
-        is_q[i] = if is_query_op(mix, i) { 1 } else { 0 };
+        *unsafe { pos.get_unchecked_mut(i) } = gen_pos(mix, n, seed);
+        *unsafe { delta.get_unchecked_mut(i) } = rng_next(seed) % 1024;
+        *unsafe { is_q.get_unchecked_mut(i) } = if is_query_op(mix, i) { 1 } else { 0 };
     }
 }
 
 fn gen_bisect_ops(pos: &mut [usize], delta: &mut [u64], is_q: &mut [u8], ks: &mut [u64], n: usize, mix: Mix, seed: &mut u64) {
     for i in 0..pos.len() {
-        pos[i] = gen_pos(mix, n, seed);
-        delta[i] = rng_next(seed) % 1024;
+        *unsafe { pos.get_unchecked_mut(i) } = gen_pos(mix, n, seed);
+        *unsafe { delta.get_unchecked_mut(i) } = rng_next(seed) % 1024;
         let qq = is_query_op(mix, i);
-        is_q[i] = if qq { 1 } else { 0 };
-        ks[i] = if qq { rng_next(seed) % (n as u64 * 512) + 1 } else { 0 };
+        *unsafe { is_q.get_unchecked_mut(i) } = if qq { 1 } else { 0 };
+        *unsafe { ks.get_unchecked_mut(i) } = if qq { rng_next(seed) % (n as u64 * 512) + 1 } else { 0 };
     }
 }
 
@@ -835,7 +836,9 @@ fn verify_query<O: Semi>(n: usize) {
     bit.fill(O::ID);
     for i in 0..n {
         let v = rng_next(&mut seed) % 1024;
-        a[i] = v;
+        
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
         bit_apply::<O>(bit, n, i, v);
     }
     for i in 0..4000usize {
@@ -855,7 +858,9 @@ fn verify_mixed<O: Semi>(n: usize) {
     bit.fill(O::ID);
     for i in 0..n {
         let v = rng_next(&mut seed) % 1024;
-        a[i] = v;
+        
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
         bit_apply::<O>(bit, n, i, v);
     }
     for i in 0..4000usize {
@@ -880,7 +885,9 @@ fn verify_range<O: Semi>(n: usize) {
         bit.fill(O::ID);
         for i in 0..n {
             let v = rng_next(&mut seed) % 1024;
-            a[i] = v;
+            
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
             bit_apply::<O>(bit, n, i, v);
         }
         for i in 0..500usize {
@@ -903,7 +910,9 @@ fn verify_bisect(n: usize, mixed: bool) {
     bit.fill(0);
     for i in 0..n {
         let v = rng_next(&mut seed) % 1024;
-        a[i] = v;
+        
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
         bit_apply::<Sum>(bit, n, i, v);
     }
     for i in 0..4000usize {
@@ -930,7 +939,9 @@ fn verify_query_u32(n: usize) {
     bit.fill(0);
     for i in 0..n {
         let v = (rng_next(&mut seed) % 1024) as u32;
-        a[i] = v;
+        
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
         bit_apply_u32(bit, n, i, v);
     }
     for i in 0..4000usize {
@@ -948,7 +959,9 @@ fn verify_mixed_u32(n: usize) {
     bit.fill(0);
     for i in 0..n {
         let v = (rng_next(&mut seed) % 1024) as u32;
-        a[i] = v;
+        
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
         bit_apply_u32(bit, n, i, v);
     }
     for i in 0..4000usize {
@@ -974,7 +987,9 @@ fn verify_range_u32(n: usize) {
         bit.fill(0);
         for i in 0..n {
             let v = (rng_next(&mut seed) % 1024) as u32;
-            a[i] = v;
+            
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
             bit_apply_u32(bit, n, i, v);
         }
         for i in 0..500usize {
@@ -1011,7 +1026,9 @@ fn measure_query<O: Semi>(name: &str, mix: Mix, mode: &str) {
         bit.fill(O::ID);
         for i in 0..n {
             let v = rng_next(&mut seed) % 1024;
-            a[i] = v;
+            
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
             bit_apply::<O>(bit, n, i, v);
         }
 
@@ -1048,8 +1065,10 @@ fn measure_query<O: Semi>(name: &str, mix: Mix, mode: &str) {
         let mut s_brute = [0f64; ROUNDS];
         let mut s_bit = [0f64; ROUNDS];
         for r in 0..ROUNDS {
-            s_brute[r] = time_query_brute::<O>(a, pos_b);
-            s_bit[r] = time_query_bit::<O>(bit, pos_t);
+            let slot = unsafe { s_brute.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_query_brute::<O>(a, pos_b);
+            let slot = unsafe { s_bit.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_query_bit::<O>(bit, pos_t);
         }
 
         let t_brute = median(&s_brute) / q_brute as f64;
@@ -1099,8 +1118,10 @@ fn measure_mixed<O: Semi>(name: &str, mix: Mix, mode: &str) {
         let mut s_brute = [0f64; ROUNDS];
         let mut s_bit = [0f64; ROUNDS];
         for r in 0..ROUNDS {
-            s_brute[r] = time_mixed_brute::<O>(a, pos_b, del_b, isb);
-            s_bit[r] = time_mixed_bit::<O>(bit, n, pos_t, del_t, ist);
+            let slot = unsafe { s_brute.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_mixed_brute::<O>(a, pos_b, del_b, isb);
+            let slot = unsafe { s_bit.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_mixed_bit::<O>(bit, n, pos_t, del_t, ist);
         }
 
         let t_brute = median(&s_brute) / q_brute as f64;
@@ -1118,7 +1139,9 @@ fn measure_range<O: Semi>(name: &str) {
     bit.fill(O::ID);
     for i in 0..N {
         let v = rng_next(&mut seed) % 1024;
-        a[i] = v;
+        
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
         bit_apply::<O>(bit, N, i, v);
     }
 
@@ -1156,8 +1179,10 @@ fn measure_range<O: Semi>(name: &str) {
         let mut s_brute = [0f64; ROUNDS];
         let mut s_bit = [0f64; ROUNDS];
         for r in 0..ROUNDS {
-            s_brute[r] = time_range_brute::<O>(a, ls_b, len);
-            s_bit[r] = time_range_bit::<O>(bit, ls_t, len);
+            let slot = unsafe { s_brute.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_range_brute::<O>(a, ls_b, len);
+            let slot = unsafe { s_bit.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_range_bit::<O>(bit, ls_t, len);
         }
 
         let t_brute = median(&s_brute) / q_brute as f64;
@@ -1177,7 +1202,9 @@ fn measure_bisect(mixed: bool) {
         bit0.fill(0);
         for i in 0..n {
             let v = rng_next(&mut seed) % 1024;
-            a0[i] = v;
+            
+        let slot = unsafe { a0.get_unchecked_mut(i) }; // i < n
+        *slot = v;
             bit_apply::<Sum>(bit0, n, i, v);
         }
         let a = unsafe { arr64(n) };
@@ -1243,7 +1270,8 @@ fn measure_bisect(mixed: bool) {
                 a.copy_from_slice(&*a0);
                 bit.copy_from_slice(&*bit0);
             }
-            s_brute[r] = if mixed {
+            let slot = unsafe { s_brute.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = if mixed {
                 time_bisect_mixed_brute(a, n, pos_b, del_b, isb, ks_b)
             } else {
                 time_bisect_query_brute(a, n, ks_b)
@@ -1251,7 +1279,8 @@ fn measure_bisect(mixed: bool) {
             if mixed {
                 bit.copy_from_slice(&*bit0);
             }
-            s_bit[r] = if mixed {
+            let slot = unsafe { s_bit.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = if mixed {
                 time_bisect_mixed_bit(bit, n, top, pos_t, del_t, ist, ks_t)
             } else {
                 time_bisect_query_bit(bit, n, top, ks_t)
@@ -1273,7 +1302,9 @@ fn measure_u32_query() {
         bit.fill(0);
         for i in 0..n {
             let v = (rng_next(&mut seed) % 1024) as u32;
-            a[i] = v;
+            
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
             bit_apply_u32(bit, n, i, v);
         }
 
@@ -1310,8 +1341,10 @@ fn measure_u32_query() {
         let mut s_brute = [0f64; ROUNDS];
         let mut s_bit = [0f64; ROUNDS];
         for r in 0..ROUNDS {
-            s_brute[r] = time_query_brute_u32(a, pos_b);
-            s_bit[r] = time_query_bit_u32(bit, pos_t);
+            let slot = unsafe { s_brute.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_query_brute_u32(a, pos_b);
+            let slot = unsafe { s_bit.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_query_bit_u32(bit, pos_t);
         }
 
         let t_brute = median(&s_brute) / q_brute as f64;
@@ -1361,8 +1394,10 @@ fn measure_u32_mixed() {
         let mut s_brute = [0f64; ROUNDS];
         let mut s_bit = [0f64; ROUNDS];
         for r in 0..ROUNDS {
-            s_brute[r] = time_mixed_brute_u32(a, pos_b, del_b, isb);
-            s_bit[r] = time_mixed_bit_u32(bit, n, pos_t, del_t, ist);
+            let slot = unsafe { s_brute.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_mixed_brute_u32(a, pos_b, del_b, isb);
+            let slot = unsafe { s_bit.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_mixed_bit_u32(bit, n, pos_t, del_t, ist);
         }
 
         let t_brute = median(&s_brute) / q_brute as f64;
@@ -1380,7 +1415,9 @@ fn measure_u32_range() {
     bit.fill(0);
     for i in 0..N {
         let v = (rng_next(&mut seed) % 1024) as u32;
-        a[i] = v;
+        
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < n
+        *slot = v;
         bit_apply_u32(bit, N, i, v);
     }
 
@@ -1418,8 +1455,10 @@ fn measure_u32_range() {
         let mut s_brute = [0f64; ROUNDS];
         let mut s_bit = [0f64; ROUNDS];
         for r in 0..ROUNDS {
-            s_brute[r] = time_range_brute_u32(a, ls_b, len);
-            s_bit[r] = time_range_bit_u32(bit, ls_t, len);
+            let slot = unsafe { s_brute.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_range_brute_u32(a, ls_b, len);
+            let slot = unsafe { s_bit.get_unchecked_mut(r) }; // r < ROUNDS
+            *slot = time_range_bit_u32(bit, ls_t, len);
         }
 
         let t_brute = median(&s_brute) / q_brute as f64;

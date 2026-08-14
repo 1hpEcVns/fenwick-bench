@@ -190,6 +190,9 @@ sum32 range 1.049），但差距只剩 1–7%。
   把周期换算成 ns，精度约 ±0.5–1%。
 - 自实现 `memset`/`memcpy`/`memmove`；`{:.3}` 浮点格式化会触发 core bignum
   崩溃，改成皮秒整数自己拼小数点输出。
+- **全部索引访问都用 `get_unchecked` / `get_unchecked_mut`**（热内核、
+  op 生成、初始化、median 收集），不变量由循环条件保证，反汇编确认热循环
+  无 `cmp/jae panic`。
 
 构建/运行（与另两项完全独立的第三个二进制和 CSV）：
 
