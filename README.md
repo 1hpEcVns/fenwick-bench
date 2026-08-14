@@ -49,6 +49,30 @@
 min/max 两种编译器都没用 `vpminuq/vpmaxuq`，而是用符号位技巧 +
 `vpcmpgtq` + blend 实现；`vpaddd` 表示 u32 累加（8 路/向量）。
 
+**Rust 热循环的边界检查（unchecked 前后）**：最初的 Rust 版本在 BIT 查询/
+修改、暴力二分扫描的热循环里，每个元素都残留一次边界检查（LLVM 无法从
+`k ≤ n` 推出 `k < len`）：
+
+```asm
+; 修改前：每步多一次 cmp + jae panic
+190d0:	cmp    %rsi,%rcx
+190d3:	jae    190e8            ; -> slice index panic
+190d5:	xor    (%rdi,%rcx,8),%r9
+```
+
+把 BIT/更新/二分循环改成 `get_unchecked`（不变量：`k ∈ [1,n]`、`i < n`、
+`j < n` 都由循环条件保证）后，热循环只剩必要的比较：
+
+```asm
+; 修改后：直接 load + blsr，无边界检查
+190e0:	xor    (%rdi,%r8,8),%r9
+190e4:	blsr   %r8,%r8
+190e9:	jne    190e0
+```
+
+C++ 用裸指针天然没有这个问题。这也解释了为什么 unchecked 前后“Rust vs C++”
+结论会翻转（见下方最优方案对比）。
+
 之前针对 sum 的详细结论（同样适用于其它操作）：**两种编译器都会自动生成
 mm256 指令**（GCC 单 ymm 累加器 + `vextracti128` 归约；LLVM 4 个 ymm 累加器、
 每轮 16 个 u64）。因此不需要手写 intrinsics；实测手写 4 累加器 mm256 版在
@@ -80,7 +104,7 @@ bash asm_check.sh      # 自动向量化检查（上面那张表）
 
 | 操作 / 模式 | C++23 | Rust edition 2024 |
 | --- | ---: | ---: |
-| sum / mixed（50% 修改） | 暴力 ≤ 8 / BIT ≥ 12 | 暴力 ≤ 8 / BIT ≥ 12 |
+| sum / mixed（50% 修改） | 暴力 ≤ 8 / BIT ≥ 12 | 无临界点（BIT 一直更快） |
 | sum / mixed_25（25% 修改） | 无临界点（BIT 一直更快） | 同左 |
 | sum / mixed_75（75% 修改） | 暴力 ≤ 512 / BIT ≥ 768 | 暴力 ≤ 1024 / BIT ≥ 1536 |
 | sum / query | 无临界点（BIT 一直更快） | 同左 |
@@ -92,7 +116,7 @@ bash asm_check.sh      # 自动向量化检查（上面那张表）
 | sum_bisect / mixed | 暴力 ≤ 768 / BIT ≥ 1024 | 暴力 ≤ 512 / BIT ≥ 768 |
 | sum_bisect / query | 无临界点（BIT 一直更快） | 同左 |
 | sum32 / query | 无临界点（BIT 一直更快） | 同左 |
-| sum32 / mixed | 暴力 ≤ 8 / BIT ≥ 12 | 暴力 ≤ 8 / BIT ≥ 12 |
+| sum32 / mixed | 暴力 ≤ 8 / BIT ≥ 12 | 无临界点（BIT 一直更快） |
 | sum32 / range | 暴力 ≤ 256 / BIT ≥ 384 | 暴力 ≤ 256 / BIT ≥ 384 |
 | min / query | 无临界点（BIT 一直更快） | 同左 |
 | max / query | 无临界点（BIT 一直更快） | 同左 |
@@ -102,7 +126,8 @@ bash asm_check.sh      # 自动向量化检查（上面那张表）
 补充比较：
 
 - **修改比例**：25% 修改时暴力的 O(1) 更新优势太小，n≥4 起 BIT 一直更快；
-  50% 时临界点 8/12；75% 时暴力能赢到 512–1024。
+  50% 时 C++ 临界点 8/12、Rust（unchecked 后）无临界点；75% 时暴力能赢到
+  512–1024。
 - **尾部偏置**（查询位置集中在 [0.9n, n)）：暴力扫描几乎总是全长，n≥4 起
   BIT 一直更快。
 - **u32 类型**：query 仍无临界点；range 临界点比 u64 略靠后（u32 暴力 8 路
@@ -116,8 +141,9 @@ bash asm_check.sh      # 自动向量化检查（上面那张表）
 - 6 种半群操作 + u32 在两种编译器下都自动向量化，纯前缀查询没有暴力空间。
 - 暴力只在小 n + 修改占比高时值得用；临界带普遍在 n≈8–20（mixed）或
   区间长度 128–256（range）。
-- Rust 与 C++ 临界点基本一致；差异主要在 mixed_75 和 bisect 这类
-  修改/扫描交互较强的负载上。
+- 开 unchecked 后 Rust 的 sum/sum32 mixed 连 n=4 的临界点都消失了（BIT 一直
+  更快）；C++ 仍是 8/12。差异主要集中在 mixed_75 和 bisect 这类修改/扫描
+  交互较强的负载上。
 
 ## 最优方案对比：Rust vs C++
 
@@ -127,28 +153,30 @@ bash asm_check.sh      # 自动向量化检查（上面那张表）
 
 | 操作 / 模式 | geomean Rust/C++ | Rust 赢的档位 |
 | --- | ---: | ---: |
-| sum / query | 1.137 | 2% |
-| min / query | 1.054 | 36% |
-| max / query | 1.137 | 2% |
-| and / query | 1.148 | 4% |
-| or / query | 1.083 | 7% |
-| xor / query | 1.099 | 9% |
-| sum / mixed | 1.128 | 7% |
-| sum / range | 1.052 | 16% |
-| xor / mixed | 1.078 | 7% |
-| xor / range | 1.073 | 3% |
-| sum_bisect / mixed | 1.067 | 7% |
-| sum_bisect / query | 1.072 | 16% |
-| sum / mixed_25 | 1.142 | 7% |
-| sum / mixed_75 | 1.137 | 11% |
-| sum / query_tail | 1.148 | 4% |
-| sum32 / query | 1.125 | 2% |
-| sum32 / mixed | 1.043 | 7% |
-| sum32 / range | 1.052 | 31% |
+| sum / query | 0.953 | 98% |
+| min / query | 0.907 | 100% |
+| max / query | 0.957 | 89% |
+| and / query | 0.989 | 73% |
+| or / query | 0.943 | 96% |
+| xor / query | 0.949 | 96% |
+| sum / mixed | 1.013 | 24% |
+| sum / range | 0.991 | 62% |
+| xor / mixed | 1.003 | 62% |
+| xor / range | 0.996 | 56% |
+| sum_bisect / mixed | 1.040 | 31% |
+| sum_bisect / query | 0.996 | 44% |
+| sum / mixed_25 | 1.061 | 16% |
+| sum / mixed_75 | 1.073 | 38% |
+| sum / query_tail | 0.950 | 96% |
+| sum32 / query | 0.980 | 89% |
+| sum32 / mixed | 0.980 | 89% |
+| sum32 / range | 1.049 | 34% |
 
-结论：本机（i9-13950HX，g++ 15.3 vs rustc 1.94.1，均 -O3/native）上 C++23
-的最优方案整体快 4–15%，没有任何模式 Rust 系统性地反超；Rust 赢面最大的是
-min 前缀查询（36% 档位）和 sum32 range（31% 档位），但都不到一半。
+结论（**Rust 已开 `get_unchecked`**）：本机（i9-13950HX，g++ 15.3 vs
+rustc 1.94.1，均 -O3/native）上，查询为主的模式 Rust 最优方案全面反超
+（min/query 快 10%、sum/query 快 5%，Rust 赢 89–100% 档位）；C++ 仍领先
+修改占比高的负载（mixed_25 1.061、mixed_75 1.073、sum_bisect mixed 1.040、
+sum32 range 1.049），但差距只剩 1–7%。
 
 ![Best-of query](best_query.webp)
 

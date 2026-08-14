@@ -123,7 +123,8 @@ fn rng_next(seed: &mut u64) -> u64 {
 #[inline(always)]
 fn brute_prefix<O: Semi>(a: &[u64], i: usize) -> u64 {
     let mut s = O::ID;
-    for &v in &a[..=i] {
+    // i < a.len() is guaranteed by every caller (pos = rng % n).
+    for &v in unsafe { a.get_unchecked(..=i) } {
         s = O::op(s, v);
     }
     s
@@ -133,7 +134,8 @@ fn brute_prefix<O: Semi>(a: &[u64], i: usize) -> u64 {
 fn brute_update<O: Semi>(a: &mut [u64], i: usize, d: u64) {
     // Only instantiated for invertible ops (sum/xor).
     if O::invertible() {
-        a[i] = O::op(a[i], d);
+        let slot = unsafe { a.get_unchecked_mut(i) }; // i < a.len()
+        *slot = O::op(*slot, d);
     }
 }
 
@@ -144,7 +146,8 @@ fn bit_prefix<O: Semi>(bit: &[u64], i: usize) -> u64 {
     let mut s = O::ID;
     let mut k = i.wrapping_add(1);
     while k != 0 {
-        s = O::op(s, bit[k]);
+        // k <= n and bit.len() == n + 1, so the index is always in bounds.
+        s = O::op(s, *unsafe { bit.get_unchecked(k) });
         k &= k.wrapping_sub(1);
     }
     s
@@ -155,7 +158,8 @@ fn bit_apply<O: Semi>(bit: &mut [u64], n: usize, i: usize, d: u64) {
     // Merge one element into the tree (build, or invertible point update).
     let mut k = i.wrapping_add(1);
     while k <= n {
-        bit[k] = O::op(bit[k], d);
+        let slot = unsafe { bit.get_unchecked_mut(k) }; // k in [1, n]
+        *slot = O::op(*slot, d);
         k = k.wrapping_add(k & k.wrapping_neg());
     }
 }
@@ -212,7 +216,8 @@ fn run_range_brute<O: Semi>(a: &[u64], ls: &[usize], len: usize) -> u64 {
     let mut acc = 0u64;
     for &l in ls {
         let mut s = O::ID;
-        for &v in &a[l..l + len] {
+        // l + len <= a.len() is guaranteed by the caller.
+        for &v in unsafe { a.get_unchecked(l..l + len) } {
             s = O::op(s, v);
         }
         acc = acc.wrapping_add(s);
@@ -242,7 +247,7 @@ fn brute_bisect(a: &[u64], n: usize, k: u64) -> usize {
     let mut s = 0u64;
     let mut j = 0usize;
     while j < n && s < k {
-        s = s.wrapping_add(a[j]);
+        s = s.wrapping_add(*unsafe { a.get_unchecked(j) }); // j < n <= a.len()
         j += 1;
     }
     j
@@ -256,9 +261,12 @@ fn bit_bisect(bit: &[u64], n: usize, top: usize, k: u64) -> usize {
     let mut kk = k;
     while m != 0 {
         let next = pos + m;
-        if next <= n && bit[next] < kk {
-            pos = next;
-            kk -= bit[next];
+        if next <= n {
+            let v = *unsafe { bit.get_unchecked(next) }; // next in [1, n]
+            if v < kk {
+                pos = next;
+                kk -= v;
+            }
         }
         m >>= 1;
     }
@@ -276,7 +284,9 @@ fn run_bisect_mixed_brute(a: &mut [u64], n: usize, pos: &[usize], delta: &[u64],
         if is_q[i] != 0 {
             acc = acc.wrapping_add(brute_bisect(a, n, ks[i]) as u64);
         } else {
-            a[pos[i]] = a[pos[i]].wrapping_add(delta[i]);
+            let p = pos[i]; // p < n
+            let slot = unsafe { a.get_unchecked_mut(p) };
+            *slot = slot.wrapping_add(delta[i]);
         }
     }
     acc
@@ -755,7 +765,7 @@ fn measure_bisect(mixed: bool) {
 #[inline(always)]
 fn brute_prefix_u32(a: &[u32], i: usize) -> u32 {
     let mut s = 0u32;
-    for &v in &a[..=i] {
+    for &v in unsafe { a.get_unchecked(..=i) } { // i < a.len()
         s = s.wrapping_add(v);
     }
     s
@@ -766,7 +776,7 @@ fn bit_prefix_u32(bit: &[u32], i: usize) -> u32 {
     let mut s = 0u32;
     let mut k = i.wrapping_add(1);
     while k != 0 {
-        s = s.wrapping_add(bit[k]);
+        s = s.wrapping_add(*unsafe { bit.get_unchecked(k) }); // k <= n
         k &= k.wrapping_sub(1);
     }
     s
@@ -776,7 +786,8 @@ fn bit_prefix_u32(bit: &[u32], i: usize) -> u32 {
 fn bit_apply_u32(bit: &mut [u32], n: usize, i: usize, d: u32) {
     let mut k = i.wrapping_add(1);
     while k <= n {
-        bit[k] = bit[k].wrapping_add(d);
+        let slot = unsafe { bit.get_unchecked_mut(k) }; // k in [1, n]
+        *slot = slot.wrapping_add(d);
         k = k.wrapping_add(k & k.wrapping_neg());
     }
 }
@@ -807,7 +818,8 @@ fn run_mixed_brute_u32(a: &mut [u32], pos: &[usize], delta: &[u64], is_q: &[u8])
         if is_q[i] != 0 {
             acc = acc.wrapping_add(brute_prefix_u32(a, p) as u64);
         } else {
-            a[p] = a[p].wrapping_add(delta[i] as u32);
+            let slot = unsafe { a.get_unchecked_mut(p) }; // p < n
+            *slot = slot.wrapping_add(delta[i] as u32);
         }
     }
     acc
@@ -832,7 +844,7 @@ fn run_range_brute_u32(a: &[u32], ls: &[usize], len: usize) -> u64 {
     let mut acc = 0u64;
     for &l in ls {
         let mut s = 0u32;
-        for &v in &a[l..l + len] {
+        for &v in unsafe { a.get_unchecked(l..l + len) } { // l + len <= a.len()
             s = s.wrapping_add(v);
         }
         acc = acc.wrapping_add(s as u64);
