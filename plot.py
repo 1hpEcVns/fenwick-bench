@@ -4,15 +4,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-MODES = [
-    ("mixed", "mixed: 1:1 point-update + prefix-query"),
-    ("query", "prefix queries only"),
-    ("range", "range sums, fixed N = 2^20"),
-]
+OPS = ["sum", "min", "max", "and", "or", "xor"]
+DYNAMIC = [("sum", "mixed"), ("sum", "range"), ("xor", "mixed"), ("xor", "range")]
+BISECT = [("sum_bisect", "mixed"), ("sum_bisect", "query")]
+FRACTIONS = [("sum", "mixed_25"), ("sum", "mixed"), ("sum", "mixed_75")]
+SUM32 = [("sum32", "query"), ("sum32", "mixed"), ("sum32", "range")]
 
 
 def load(path):
-    return pd.read_csv(path, names=["mode", "n", "brute_ns", "bit_ns"])
+    return pd.read_csv(path, names=["op", "mode", "n", "brute_ns", "bit_ns"])
 
 
 def boundary(sub):
@@ -25,92 +25,292 @@ def boundary(sub):
     return None
 
 
+def who_wins(sub):
+    """'brute' or 'BIT' based on the first measured size."""
+    if sub.empty:
+        return "?"
+    return "brute" if (sub["brute_ns"] < sub["bit_ns"]).iloc[0] else "BIT"
+
+
 def xlabel(mode):
     return "L (range length)" if mode == "range" else "n (array size)"
 
 
+def draw_curves(ax, df, op, mode, curves):
+    """curves: list of (col, label, color, marker, linestyle)."""
+    sub = df[(df["op"] == op) & (df["mode"] == mode)]
+    if sub.empty:
+        return None
+    for col, label, color, marker, ls in curves:
+        ax.plot(sub["n"], sub[col], marker=marker, markersize=4,
+                linewidth=1.3, color=color, label=label, linestyle=ls)
+    b = boundary(sub)
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log")
+    ax.set_title(f"{op} / {mode}")
+    ax.set_xlabel(xlabel(mode))
+    ax.set_ylabel("ns / op")
+    ax.grid(True, which="both", alpha=0.25)
+    ax.legend(fontsize=7, loc="upper left")
+    if b is not None:
+        ax.annotate(f"brute ≤ {b[0]} / BIT ≥ {b[1]}",
+                    xy=(0.03, 0.90), xytext=(0.03, 0.90),
+                    textcoords="axes fraction", color="#1f77b4", fontsize=9)
+    else:
+        ax.annotate(f"no crossover ({who_wins(sub)} always faster)",
+                    xy=(0.03, 0.90), xytext=(0.03, 0.90),
+                    textcoords="axes fraction", color="#7f7f7f", fontsize=9)
+    return b
+
+
 def plot_source(csv_path, out_prefix, title_label):
     df = load(csv_path)
+    curves = [
+        ("brute_ns", "brute", "#d62728", "o", "-"),
+        ("bit_ns", "BIT", "#1f77b4", "s", "-"),
+    ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(17, 5.4))
-    for ax, (mode, label) in zip(axes, MODES):
-        sub = df[df["mode"] == mode]
-        ax.plot(sub["n"], sub["brute_ns"], marker="o", markersize=5,
-                linewidth=1.5, color="#d62728", label="brute (plain array)")
-        ax.plot(sub["n"], sub["bit_ns"], marker="s", markersize=5,
-                linewidth=1.5, color="#1f77b4", label="Fenwick (BIT)")
-        b = boundary(sub)
-        ax.set_xscale("log", base=2)
-        ax.set_yscale("log")
-        ax.set_title(label)
-        ax.set_xlabel(xlabel(mode))
-        ax.set_ylabel("ns / op")
-        ax.grid(True, which="both", alpha=0.25)
-        if b is not None:
-            ax.axvline(b[1], color="#1f77b4", ls=":", lw=1.2)
-            ax.annotate(f"brute ≤ {b[0]} / BIT ≥ {b[1]}",
-                        xy=(0.03, 0.90), xytext=(0.03, 0.90),
-                        textcoords="axes fraction", color="#1f77b4", fontsize=10)
-        else:
-            ax.annotate("no crossover", xy=(0.03, 0.90), xytext=(0.03, 0.90),
-                        textcoords="axes fraction", color="#7f7f7f", fontsize=10)
-        ax.legend(loc="upper left", fontsize=9)
-    fig.suptitle(f"{title_label} — brute force vs Fenwick tree", fontsize=14)
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
-    fig.savefig(f"{out_prefix}_crossover.webp", dpi=150)
+    # query mode: 6 ops
+    fig, axes = plt.subplots(2, 3, figsize=(17, 9))
+    for ax, op in zip(axes.flat, OPS):
+        draw_curves(ax, df, op, "query", curves)
+    fig.suptitle(f"{title_label} — prefix-query brute vs BIT (all ops)", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(f"{out_prefix}_query.webp", dpi=150)
     plt.close(fig)
 
-    fig2, axes2 = plt.subplots(1, 3, figsize=(17, 5))
-    for ax, (mode, label) in zip(axes2, MODES):
-        sub = df[df["mode"] == mode]
-        ax.plot(sub["n"], sub["bit_ns"] / sub["brute_ns"],
-                marker="o", color="#1f77b4")
+    # dynamic modes: sum/xor mixed+range
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    for ax, (op, mode) in zip(axes.flat, DYNAMIC):
+        draw_curves(ax, df, op, mode, curves)
+    fig.suptitle(f"{title_label} — dynamic modes (mixed 1:1, range N=2^20)", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(f"{out_prefix}_dynamic.webp", dpi=150)
+    plt.close(fig)
+
+    # ratio figures
+    fig, axes = plt.subplots(2, 3, figsize=(17, 8))
+    for ax, op in zip(axes.flat, OPS):
+        sub = df[(df["op"] == op) & (df["mode"] == "query")]
+        ax.plot(sub["n"], sub["bit_ns"] / sub["brute_ns"], marker="o",
+                markersize=4, color="#1f77b4")
         ax.axhline(1.0, color="black", lw=1)
         ax.set_xscale("log", base=2)
-        ax.set_title(label)
+        ax.set_title(f"{op} / query")
+        ax.set_xlabel(xlabel("query"))
+        ax.set_ylabel("ratio (BIT / brute)")
+        ax.grid(True, which="both", alpha=0.25)
+    fig.suptitle(f"{title_label} — query-mode ratio, below 1 = brute faster",
+                 fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(f"{out_prefix}_ratio_query.webp", dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8))
+    for ax, (op, mode) in zip(axes.flat, DYNAMIC):
+        sub = df[(df["op"] == op) & (df["mode"] == mode)]
+        ax.plot(sub["n"], sub["bit_ns"] / sub["brute_ns"], marker="o",
+                markersize=4, color="#1f77b4")
+        ax.axhline(1.0, color="black", lw=1)
+        ax.set_xscale("log", base=2)
+        ax.set_title(f"{op} / {mode}")
         ax.set_xlabel(xlabel(mode))
         ax.set_ylabel("ratio (BIT / brute)")
         ax.grid(True, which="both", alpha=0.25)
-    fig2.suptitle(f"{title_label} — ratio below 1 means brute is faster",
-                  fontsize=14)
-    fig2.tight_layout(rect=(0, 0, 1, 0.95))
-    fig2.savefig(f"{out_prefix}_ratio.webp", dpi=150)
-    plt.close(fig2)
+    fig.suptitle(f"{title_label} — dynamic-mode ratio, below 1 = brute faster",
+                 fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(f"{out_prefix}_ratio_dynamic.webp", dpi=150)
+    plt.close(fig)
+
+    # BIT binary search (树状数组上二分): sum only
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2))
+    for ax, (op, mode) in zip(axes, BISECT):
+        draw_curves(ax, df, op, mode, curves)
+    fig.suptitle(f"{title_label} — BIT binary search (sum, prefix >= k)", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(f"{out_prefix}_bisect.webp", dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    for ax, (op, mode) in zip(axes, BISECT):
+        sub = df[(df["op"] == op) & (df["mode"] == mode)]
+        ax.plot(sub["n"], sub["bit_ns"] / sub["brute_ns"], marker="o",
+                markersize=4, color="#1f77b4")
+        ax.axhline(1.0, color="black", lw=1)
+        ax.set_xscale("log", base=2)
+        ax.set_title(f"{op} / {mode}")
+        ax.set_xlabel("n (array size)")
+        ax.set_ylabel("ratio (BIT / brute)")
+        ax.grid(True, which="both", alpha=0.25)
+    fig.suptitle(f"{title_label} — BIT-bisect ratio, below 1 = brute faster",
+                 fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(f"{out_prefix}_ratio_bisect.webp", dpi=150)
+    plt.close(fig)
+
+    # update-fraction sweep (sum)
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5.2))
+    for ax, (op, mode) in zip(axes, FRACTIONS):
+        draw_curves(ax, df, op, mode, curves)
+        ax.set_title(f"sum / {mode}")
+    fig.suptitle(f"{title_label} — sum mixed update fraction (25% / 50% / 75%)",
+                 fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(f"{out_prefix}_fractions.webp", dpi=150)
+    plt.close(fig)
+
+    # tail-heavy queries (sum)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    draw_curves(ax, df, "sum", "query_tail", curves)
+    fig.suptitle(f"{title_label} — sum tail-heavy prefix queries (p in [0.9n, n))",
+                 fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(f"{out_prefix}_tail.webp", dpi=150)
+    plt.close(fig)
+
+    # u32 element type (sum)
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5.2))
+    for ax, (op, mode) in zip(axes, SUM32):
+        draw_curves(ax, df, op, mode, curves)
+        ax.set_title(f"sum32 / {mode}")
+    fig.suptitle(f"{title_label} — u32 sum (query / mixed / range)", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(f"{out_prefix}_sum32.webp", dpi=150)
+    plt.close(fig)
+
+    # ratio figures for the new families
+    for name, combos, title in [
+        ("fractions", FRACTIONS, "update fraction"),
+        ("tail", [("sum", "query_tail")], "tail-heavy queries"),
+        ("sum32", SUM32, "u32 sum"),
+    ]:
+        fig, axes = plt.subplots(1, len(combos), figsize=(8 * len(combos), 5))
+        if len(combos) == 1:
+            axes = [axes]
+        for ax, (op, mode) in zip(axes, combos):
+            sub = df[(df["op"] == op) & (df["mode"] == mode)]
+            ax.plot(sub["n"], sub["bit_ns"] / sub["brute_ns"], marker="o",
+                    markersize=4, color="#1f77b4")
+            ax.axhline(1.0, color="black", lw=1)
+            ax.set_xscale("log", base=2)
+            ax.set_title(f"{op} / {mode}")
+            ax.set_xlabel(xlabel(mode))
+            ax.set_ylabel("ratio (BIT / brute)")
+            ax.grid(True, which="both", alpha=0.25)
+        fig.suptitle(f"{title_label} — {title} ratio, below 1 = brute faster",
+                     fontsize=14)
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        fig.savefig(f"{out_prefix}_ratio_{name}.webp", dpi=150)
+        plt.close(fig)
 
     print(f"\n{title_label} crossover (last brute-win / first BIT-win):")
-    for mode, label in MODES:
-        sub = df[df["mode"] == mode]
-        b = boundary(sub)
-        print(f"  {mode:6s}: " +
-              (f"brute ≤ {b[0]} / BIT ≥ {b[1]}" if b else "no crossover"))
+    for op in OPS:
+        b = boundary(df[(df["op"] == op) & (df["mode"] == "query")])
+        print(f"  {op:4s} query: " +
+              (f"brute ≤ {b[0]} / BIT ≥ {b[1]}" if b
+               else f"no crossover ({who_wins(df[(df['op'] == op) & (df['mode'] == 'query')])} always faster)"))
+    for op, mode in DYNAMIC:
+        b = boundary(df[(df["op"] == op) & (df["mode"] == mode)])
+        print(f"  {op:4s} {mode}: " +
+              (f"brute ≤ {b[0]} / BIT ≥ {b[1]}" if b
+               else f"no crossover ({who_wins(df[(df['op'] == op) & (df['mode'] == mode)])} always faster)"))
+    for op, mode in BISECT:
+        b = boundary(df[(df["op"] == op) & (df["mode"] == mode)])
+        print(f"  {op:10s} {mode}: " +
+              (f"brute ≤ {b[0]} / BIT ≥ {b[1]}" if b
+               else f"no crossover ({who_wins(df[(df['op'] == op) & (df['mode'] == mode)])} always faster)"))
+    for op, mode in FRACTIONS:
+        b = boundary(df[(df["op"] == op) & (df["mode"] == mode)])
+        print(f"  {op:4s} {mode}: " +
+              (f"brute ≤ {b[0]} / BIT ≥ {b[1]}" if b
+               else f"no crossover ({who_wins(df[(df['op'] == op) & (df['mode'] == mode)])} always faster)"))
+    for op, mode in [("sum", "query_tail")] + SUM32:
+        b = boundary(df[(df["op"] == op) & (df["mode"] == mode)])
+        print(f"  {op:8s} {mode}: " +
+              (f"brute ≤ {b[0]} / BIT ≥ {b[1]}" if b
+               else f"no crossover ({who_wins(df[(df['op'] == op) & (df['mode'] == mode)])} always faster)"))
 
 
 def plot_cpp_vs_rust():
     cpp = load("results.csv")
     rust = load("results_rs.csv")
 
-    fig, axes = plt.subplots(1, 3, figsize=(17, 5.4))
-    for ax, (mode, label) in zip(axes, MODES):
-        c = cpp[cpp["mode"] == mode]
-        r = rust[rust["mode"] == mode]
-        ax.plot(c["n"], c["bit_ns"], marker="s", linewidth=1.5,
-                color="#1f77b4", label="C++23 BIT")
-        ax.plot(r["n"], r["bit_ns"], marker="s", ls="--", linewidth=1.5,
-                color="#d62728", label="Rust BIT")
-        ax.plot(c["n"], c["brute_ns"], marker="o", linewidth=1.5,
-                color="#7f7f7f", label="C++23 brute")
-        ax.plot(r["n"], r["brute_ns"], marker="o", ls="--", linewidth=1.5,
-                color="#ff7f0e", label="Rust brute")
-        ax.set_xscale("log", base=2)
-        ax.set_yscale("log")
-        ax.set_title(label)
-        ax.set_xlabel(xlabel(mode))
-        ax.set_ylabel("ns / op")
-        ax.grid(True, which="both", alpha=0.25)
-        ax.legend(fontsize=9)
-    fig.suptitle("C++23 vs Rust (dashed = Rust)", fontsize=14)
+    fig, axes = plt.subplots(2, 3, figsize=(17, 9))
+    for ax, op in zip(axes.flat, OPS):
+        draw_curves(ax, cpp, op, "query", [
+            ("bit_ns", "C++23 BIT", "#1f77b4", "s", "-"),
+            ("brute_ns", "C++23 brute", "#7f7f7f", "o", "-"),
+        ])
+        draw_curves(ax, rust, op, "query", [
+            ("bit_ns", "Rust BIT", "#d62728", "s", "--"),
+            ("brute_ns", "Rust brute", "#ff7f0e", "o", "--"),
+        ])
+    fig.suptitle("C++23 vs Rust — prefix-query (dashed = Rust)", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig("cpp_vs_rust_query.webp", dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    for ax, (op, mode) in zip(axes.flat, DYNAMIC):
+        draw_curves(ax, cpp, op, mode, [
+            ("bit_ns", "C++23 BIT", "#1f77b4", "s", "-"),
+            ("brute_ns", "C++23 brute", "#7f7f7f", "o", "-"),
+        ])
+        draw_curves(ax, rust, op, mode, [
+            ("bit_ns", "Rust BIT", "#d62728", "s", "--"),
+            ("brute_ns", "Rust brute", "#ff7f0e", "o", "--"),
+        ])
+    fig.suptitle("C++23 vs Rust — dynamic modes (dashed = Rust)", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig("cpp_vs_rust_dynamic.webp", dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2))
+    for ax, (op, mode) in zip(axes, BISECT):
+        draw_curves(ax, cpp, op, mode, [
+            ("bit_ns", "C++23 BIT", "#1f77b4", "s", "-"),
+            ("brute_ns", "C++23 brute", "#7f7f7f", "o", "-"),
+        ])
+        draw_curves(ax, rust, op, mode, [
+            ("bit_ns", "Rust BIT", "#d62728", "s", "--"),
+            ("brute_ns", "Rust brute", "#ff7f0e", "o", "--"),
+        ])
+    fig.suptitle("C++23 vs Rust — BIT binary search (dashed = Rust)", fontsize=14)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    fig.savefig("cpp_vs_rust.webp", dpi=150)
+    fig.savefig("cpp_vs_rust_bisect.webp", dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5.2))
+    for ax, (op, mode) in zip(axes, FRACTIONS):
+        draw_curves(ax, cpp, op, mode, [
+            ("bit_ns", "C++23 BIT", "#1f77b4", "s", "-"),
+            ("brute_ns", "C++23 brute", "#7f7f7f", "o", "-"),
+        ])
+        draw_curves(ax, rust, op, mode, [
+            ("bit_ns", "Rust BIT", "#d62728", "s", "--"),
+            ("brute_ns", "Rust brute", "#ff7f0e", "o", "--"),
+        ])
+        ax.set_title(f"sum / {mode}")
+    fig.suptitle("C++23 vs Rust — update-fraction sweep (dashed = Rust)", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig("cpp_vs_rust_fractions.webp", dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5.2))
+    for ax, (op, mode) in zip(axes, SUM32):
+        draw_curves(ax, cpp, op, mode, [
+            ("bit_ns", "C++23 BIT", "#1f77b4", "s", "-"),
+            ("brute_ns", "C++23 brute", "#7f7f7f", "o", "-"),
+        ])
+        draw_curves(ax, rust, op, mode, [
+            ("bit_ns", "Rust BIT", "#d62728", "s", "--"),
+            ("brute_ns", "Rust brute", "#ff7f0e", "o", "--"),
+        ])
+        ax.set_title(f"sum32 / {mode}")
+    fig.suptitle("C++23 vs Rust — u32 sum (dashed = Rust)", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig("cpp_vs_rust_sum32.webp", dpi=150)
     plt.close(fig)
 
 

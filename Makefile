@@ -1,4 +1,4 @@
-.PHONY: all bench bench-rs bench-all bench-run bench-run-rs plot
+.PHONY: all bench bench-rs bench-all bench-run bench-run-rs plot asm-check
 
 CXX ?= g++
 CXXFLAGS ?= -O3 -march=native -std=c++23
@@ -22,3 +22,6 @@ bench-all: bench-run bench-run-rs
 
 plot: bench-all
 	nix develop --command python3 plot.py
+
+asm-check:
+	bash asm_check.sh

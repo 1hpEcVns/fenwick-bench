@@ -1,115 +1,183 @@
-# 直接暴力 vs 树状数组（BIT）：临界点在哪
+# 直接暴力 vs 树状数组（BIT）：半群操作临界点
 
-同一个数据集合（`u64`，单点修改 + 前缀和 / 区间和查询），对比两种实现，测量“在
-多大的 n（或区间长度 L）时，直接暴力比树状数组快”：
+对同一个前缀/区间查询集合，对比两种实现：
 
-- **brute（直接暴力）**：普通数组；修改 `a[i] += d` 是 O(1)；前缀和查询从
-  `0` 循环加到 `i`，区间和查询从 `l` 循环到 `r`。源码就是普通 `for` 循环，
-  不手写 intrinsics——编译后 GCC/LLVM 都会自动生成 `vpaddq ymm`（mm256）
-  向量化扫描，见下方「汇编验证」。
-- **BIT（树状数组）**：1-indexed `tree[1..n]`；修改和查询都是标准的
-  `lowbit` 循环，O(log n)。
+- **brute（直接暴力）**：普通数组 + 普通 `for` 循环；不手写 intrinsics。
+- **BIT（树状数组）**：1-indexed `tree[1..n]`，查询/合并用 `lowbit` 循环。
 
-## 三种测量模式
+覆盖 6 种半群操作（都是 `u64`）：
 
-| 模式 | 含义 | 横轴 |
+| 操作 | 单位元 | 是否可逆（支持修改） |
 | --- | --- | --- |
-| `mixed` | 1:1 交错的单点修改 + 前缀和查询（最接近实际用法） | n（数组大小） |
-| `query` | 只做前缀和查询，不做修改 | n（数组大小） |
-| `range` | 固定 N=2^20 的数组，随机区间 `[l, l+L)` 求和 | L（区间长度） |
+| sum | 0 | 是 |
+| xor | 0 | 是 |
+| min | UINT64_MAX | 否 |
+| max | 0 | 否 |
+| and | UINT64_MAX | 否 |
+| or | 0 | 否 |
+
+测量模式：
+
+| 模式 | 含义 | 适用操作 |
+| --- | --- | --- |
+| `query` | 纯前缀查询，随机位置 | 全部 6 种 |
+| `mixed` | 1:1 交错的单点修改 + 前缀查询 | 仅 sum / xor（可逆） |
+| `range` | 固定 N=2^20 的区间查询，长度 L | 仅 sum / xor（可逆） |
+| `bisect` | 树状数组上二分：求前缀和首次 ≥ k 的位置（值非负） | 仅 sum |
+
+`bisect`（罕见但经典）的两种实现：暴力从 0 开始累加到 ≥ k（O(n)）；BIT 用
+二进制上跳（最高位开始，`bit[next] < k` 则跳，O(log n)）。查询 k 在
+`[1, n*512]` 均匀随机，带非负随机增量；`mixed` 为 1:1 修改+查询，
+`query` 为纯查询。
+
+## 汇编验证：这些操作有没有自动向量化？
+
+源码全部是普通循环。`bash asm_check.sh`（CXX/RUSTC 可用 `nix develop` 提供）
+把每个操作的最小前缀循环分别用 GCC 15.3 和 LLVM 编译（`-O3 -march=native` /
+`--edition=2024 -O -C target-cpu=native`），统计对应 SIMD 指令出现次数：
+
+| 操作 | 期望指令 | GCC# | LLVM# |
+| --- | --- | ---: | ---: |
+| sum | `vpaddq` | 3 | 12 |
+| min | `vpminuq` / `vpcmpgtq` | 0 / 6 | 0 / 24 |
+| max | `vpmaxuq` / `vpcmpgtq` | 0 / 6 | 0 / 24 |
+| and | `vpand` | 3 | 12 |
+| or | `vpor` | 3 | 12 |
+| xor | `vpxor` | 9 | 64 |
+| sum32 | `vpaddd` | 7 | 13 |
+
+min/max 两种编译器都没用 `vpminuq/vpmaxuq`，而是用符号位技巧 +
+`vpcmpgtq` + blend 实现；`vpaddd` 表示 u32 累加（8 路/向量）。
+
+之前针对 sum 的详细结论（同样适用于其它操作）：**两种编译器都会自动生成
+mm256 指令**（GCC 单 ymm 累加器 + `vextracti128` 归约；LLVM 4 个 ymm 累加器、
+每轮 16 个 u64）。因此不需要手写 intrinsics；实测手写 4 累加器 mm256 版在
+mixed 模式反而慢 7–10%，大 L 区间和慢 10–17%，所以保留普通循环源码。
 
 ## 复现
 
 ```bash
 nix develop            # gcc/rustc/python+matplotlib
-make bench-all         # ./bench > results.csv (C++23) 然后 ./bench_rs > results_rs.csv (Rust)
-make plot              # 重新测 + 生成 5 张图并输出临界点
+make bench-all         # C++23 results.csv + Rust results_rs.csv
+make plot              # 重测 + 生成图并输出临界点
+bash asm_check.sh      # 自动向量化检查（上面那张表）
 ```
 
-编译/测量方法（与 `bsearch_bench` 一致）：
+编译/测量方法：
 
 - C++23：`g++ -O3 -march=native -std=c++23`
-- Rust：`rustc --edition=2024 -O -C target-cpu=native`（edition 2024）
+- Rust：`rustc --edition=2024 -O -C target-cpu=native`
 - 固定单个 P-core：`taskset -c 0`；C++ 和 Rust 串行跑，避免抢核
 - 每个方法先校准到约 3 ms/轮的查询数，再跑 9 轮取中位数
-- 每个 n 测量前先用随机操作流交叉验证 brute 与 BIT 结果一致（不通过直接
-  abort）
+- 每个 (op, mode, n) 测量前先用随机操作流交叉验证 brute 与 BIT 结果一致
+  （不通过直接 abort）
 - 位置用 mt19937_64（C++）/ splitmix64 高 32 位（Rust）生成，避免 LCG 在
   2 的幂 n 上出现周期坏数据
 
-## 汇编验证：普通循环已经被自动向量化
-
-动手写 mm256 之前先看了 `-O3 -march=native`（C++23）和
-`-O -C target-cpu=native`（Rust edition 2024）生成的汇编：
-
-**C++（GCC 15.3）**：前缀/区间求和循环自动向量化为单 ymm 累加器，每轮 32 字节：
-
-```asm
-.L3:
-	vpaddq	(%rax), %ymm0, %ymm0
-	addq	$32, %rax
-	cmpq	%rdx, %rax
-	jne	.L3
-	vextracti128	$0x1, %ymm0, %xmm1
-	vpaddq	%xmm0, %xmm1, %xmm0
-	vpsrldq	$8, %xmm0, %xmm1
-	vpaddq	%xmm1, %xmm0, %xmm0
-```
-
-**Rust（LLVM）**：同样自动向量化，而且是 4 个 ymm 累加器，每轮 16 个 u64：
-
-```asm
-	vpaddq	(%rdi,%rax,8), %ymm0, %ymm0
-	vpaddq	32(%rdi,%rax,8), %ymm1, %ymm1
-	vpaddq	64(%rdi,%rax,8), %ymm2, %ymm2
-	vpaddq	96(%rdi,%rax,8), %ymm3, %ymm3
-```
-
-既然普通循环的机器码已经是 mm256，就不需要手写 intrinsics。实测手写 4 累加器
-mm256 版（`_mm256_loadu_si256` + `_mm256_add_epi64`）对比自动向量化版：
-
-| 场景 | 手写 mm256 vs 普通循环 |
-| --- | --- |
-| mixed（n=4..768） | 慢 7–10%（每轮 hsum 和循环结构更差） |
-| query | 基本持平（±2% 噪声） |
-| range，L ≤ 64 | 快 3–5% |
-| range，L ≥ 1024 | 慢 10–17% |
-
-结论：保留普通循环源码，机器码即为 AVX2 mm256；BIT 侧也保持最直接的实现。
-
 ## 本机结果（i9-13950HX，g++ 15.3，rustc 1.94.1）
 
-“临界点”指：`暴力赢的最后一个大小 / BIT 赢的第一个大小`（两者之间是临界带）。
+“临界点”指：`暴力赢的最后一个大小 / BIT 赢的第一个大小`。
 
-| 模式 | C++23 | Rust edition 2024 |
+| 操作 / 模式 | C++23 | Rust edition 2024 |
 | --- | ---: | ---: |
-| mixed（1:1 修改+前缀和） | 暴力 ≤ 8 / BIT ≥ 12 | 暴力 ≤ 8 / BIT ≥ 12 |
-| query（纯前缀和查询） | 无临界点：n ≥ 4 起 BIT 一直更快 | 无临界点：n ≥ 4 起 BIT 一直更快 |
-| range（区间和，N=2^20） | 暴力 ≤ 128 / BIT ≥ 192 | 暴力 ≤ 192 / BIT ≥ 256 |
+| sum / mixed（50% 修改） | 暴力 ≤ 8 / BIT ≥ 12 | 暴力 ≤ 8 / BIT ≥ 12 |
+| sum / mixed_25（25% 修改） | 无临界点（BIT 一直更快） | 同左 |
+| sum / mixed_75（75% 修改） | 暴力 ≤ 512 / BIT ≥ 768 | 暴力 ≤ 1024 / BIT ≥ 1536 |
+| sum / query | 无临界点（BIT 一直更快） | 同左 |
+| sum / query_tail（p∈[0.9n,n)） | 无临界点（BIT 一直更快） | 同左 |
+| sum / range | 暴力 ≤ 192 / BIT ≥ 256 | 暴力 ≤ 192 / BIT ≥ 256 |
+| xor / mixed | 暴力 ≤ 8 / BIT ≥ 12 | 暴力 ≤ 8 / BIT ≥ 12 |
+| xor / query | 无临界点（BIT 一直更快） | 同左 |
+| xor / range | 暴力 ≤ 192 / BIT ≥ 256 | 暴力 ≤ 192 / BIT ≥ 256 |
+| sum_bisect / mixed | 暴力 ≤ 768 / BIT ≥ 1024 | 暴力 ≤ 512 / BIT ≥ 768 |
+| sum_bisect / query | 无临界点（BIT 一直更快） | 同左 |
+| sum32 / query | 无临界点（BIT 一直更快） | 同左 |
+| sum32 / mixed | 暴力 ≤ 8 / BIT ≥ 12 | 暴力 ≤ 8 / BIT ≥ 12 |
+| sum32 / range | 暴力 ≤ 256 / BIT ≥ 384 | 暴力 ≤ 256 / BIT ≥ 384 |
+| min / query | 无临界点（BIT 一直更快） | 同左 |
+| max / query | 无临界点（BIT 一直更快） | 同左 |
+| and / query | 无临界点（BIT 一直更快） | 同左 |
+| or / query | 无临界点（BIT 一直更快） | 同左 |
+
+补充比较：
+
+- **修改比例**：25% 修改时暴力的 O(1) 更新优势太小，n≥4 起 BIT 一直更快；
+  50% 时临界点 8/12；75% 时暴力能赢到 512–1024。
+- **尾部偏置**（查询位置集中在 [0.9n, n)）：暴力扫描几乎总是全长，n≥4 起
+  BIT 一直更快。
+- **u32 类型**：query 仍无临界点；range 临界点比 u64 略靠后（u32 暴力 8 路
+  向量化更划算）。
+- **树状数组上二分**：纯查询下 BIT 从 n=4 起一直更快；带 1:1 修改时暴力能赢到
+  512–1024（值在一轮内持续增长会缩短暴力扫描，因此该临界点是偏向暴力的
+  上界；k 在 [1, n*512] 均匀分布）。
 
 直观结论：
 
-- **纯查询没有任何暴力空间**。BIT 前缀查询平均只要 `popcount(k)` 次依赖
-  load（n=4 时平均 1.5 步），而暴力平均扫 n/2 个元素；n=4 起 BIT 就赢了。
-- **一旦带修改，暴力靠 O(1) 更新在小 n 上翻身**：mixed 场景下 n ≤ 8 暴力
-  整体更快，n ≥ 12 开始 BIT 更快。n=16 附近两条线只差 ~1%（BIT 的单步次数
-  随 n 的二进制结构有跳变），所以更准确的说法是临界带 n ≈ 8–20。
-- **区间和按长度分界**：L 在 128（C++）/ 192（Rust）以内时直接循环更快，
-  再大就轮到 BIT（两次前缀和）赢；这个长度约等于 16–24 条 64B cache line。
-- Rust 与 C++ 的临界点基本一致；Rust 的暴力循环在大 L 上与 C++ 接近
-  （约 5–10% 慢，随运行波动），所以 range 临界点略靠后。mixed/query 两种
-  语言逐点几乎重合。
+- 6 种半群操作 + u32 在两种编译器下都自动向量化，纯前缀查询没有暴力空间。
+- 暴力只在小 n + 修改占比高时值得用；临界带普遍在 n≈8–20（mixed）或
+  区间长度 128–256（range）。
+- Rust 与 C++ 临界点基本一致；差异主要在 mixed_75 和 bisect 这类
+  修改/扫描交互较强的负载上。
 
 图（WebP）：
 
-![C++23 crossover](cpp23_crossover.webp)
+![C++23 query](cpp23_query.webp)
 
-![C++23 ratio](cpp23_ratio.webp)
+![C++23 dynamic](cpp23_dynamic.webp)
 
-![Rust crossover](rust_crossover.webp)
+![C++23 query ratio](cpp23_ratio_query.webp)
 
-![Rust ratio](rust_ratio.webp)
+![C++23 dynamic ratio](cpp23_ratio_dynamic.webp)
 
-![C++23 vs Rust](cpp_vs_rust.webp)
+![Rust query](rust_query.webp)
 
-原始数据：`results.csv`（C++23）、`results_rs.csv`（Rust）。
+![Rust dynamic](rust_dynamic.webp)
+
+![Rust query ratio](rust_ratio_query.webp)
+
+![Rust dynamic ratio](rust_ratio_dynamic.webp)
+
+![C++23 vs Rust query](cpp_vs_rust_query.webp)
+
+![C++23 vs Rust dynamic](cpp_vs_rust_dynamic.webp)
+
+![C++23 bisect](cpp23_bisect.webp)
+
+![C++23 bisect ratio](cpp23_ratio_bisect.webp)
+
+![Rust bisect](rust_bisect.webp)
+
+![Rust bisect ratio](rust_ratio_bisect.webp)
+
+![C++23 vs Rust bisect](cpp_vs_rust_bisect.webp)
+
+![C++23 fractions](cpp23_fractions.webp)
+
+![C++23 fractions ratio](cpp23_ratio_fractions.webp)
+
+![C++23 tail](cpp23_tail.webp)
+
+![C++23 tail ratio](cpp23_ratio_tail.webp)
+
+![C++23 sum32](cpp23_sum32.webp)
+
+![C++23 sum32 ratio](cpp23_ratio_sum32.webp)
+
+![Rust fractions](rust_fractions.webp)
+
+![Rust fractions ratio](rust_ratio_fractions.webp)
+
+![Rust tail](rust_tail.webp)
+
+![Rust tail ratio](rust_ratio_tail.webp)
+
+![Rust sum32](rust_sum32.webp)
+
+![Rust sum32 ratio](rust_ratio_sum32.webp)
+
+![C++23 vs Rust fractions](cpp_vs_rust_fractions.webp)
+
+![C++23 vs Rust sum32](cpp_vs_rust_sum32.webp)
+
+原始数据：`results.csv`（C++23）、`results_rs.csv`（Rust），列为
+`op,mode,n,brute_ns,bit_ns`。
