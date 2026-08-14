@@ -178,6 +178,65 @@ rustc 1.94.1，均 -O3/native）上，查询为主的模式 Rust 最优方案全
 修改占比高的负载（mixed_25 1.061、mixed_75 1.073、sum_bisect mixed 1.040、
 sum32 range 1.049），但差距只剩 1–7%。
 
+## 第三项：裸 Rust 变体（no_std / no_main）
+
+`bench_no_std.rs` 是同一个基准的 freestanding 版本：`#![no_std]` +
+`#![no_main]`，自定义 `_start`，不链接 libc/std/allocator。差异点：
+
+- 内存：Vec/堆换成约 300MB 的静态 `.bss` 缓冲（两个操作流各占一半）。
+- 输出/退出：直接 Linux syscall（write / exit），无 std::io。
+- 计时：热循环用 `rdtscp` 插桩；本沙箱会把裸 `clock_gettime`/`nanosleep`
+  syscall 直接 SIGSEGV，所以用 CPUID.16H EAX（基频，即恒定 TSC 频率）
+  把周期换算成 ns，精度约 ±0.5–1%。
+- 自实现 `memset`/`memcpy`/`memmove`；`{:.3}` 浮点格式化会触发 core bignum
+  崩溃，改成皮秒整数自己拼小数点输出。
+
+构建/运行（与另两项完全独立的第三个二进制和 CSV）：
+
+```bash
+make bench-bare       # rustc ... -C panic=abort -nostartfiles -static -no-pie
+make bench-run-bare   # taskset -c 0 ./bench_bare > results_bare.csv
+```
+
+最优方案（min(brute, BIT)）逐档对比 std Rust vs bare Rust：
+
+| 操作 / 模式 | geomean bare/std | bare 赢的档位 |
+| --- | ---: | ---: |
+| sum / query | 1.012 | 51% |
+| min / query | 1.031 | 36% |
+| max / query | 1.046 | 16% |
+| and / query | 1.012 | 42% |
+| or / query | 1.005 | 47% |
+| xor / query | 1.010 | 47% |
+| sum / mixed | 1.046 | 4% |
+| sum / range | 0.966 | 78% |
+| xor / mixed | 0.991 | 80% |
+| xor / range | 1.025 | 38% |
+| sum_bisect / mixed | 1.023 | 38% |
+| sum_bisect / query | 0.952 | 56% |
+| sum / mixed_25 | 1.067 | 7% |
+| sum / mixed_75 | 1.032 | 4% |
+| sum / query_tail | 0.981 | 93% |
+| sum32 / query | 1.001 | 58% |
+| sum32 / mixed | 0.976 | 91% |
+| sum32 / range | 0.999 | 53% |
+
+结论：裸版与 std Rust 的差距基本在 ±5% 内（热内核完全相同，差异主要来自
+rdtsc 换算误差和静态内存布局），没有额外运行时开销；个别模式裸版反而略快
+（query_tail 0.981、sum_bisect query 0.952、sum32 mixed 0.976）。
+
+![std vs bare query](std_vs_bare_query.webp)
+
+![std vs bare dynamic](std_vs_bare_dynamic.webp)
+
+![std vs bare bisect](std_vs_bare_bisect.webp)
+
+![std vs bare fractions](std_vs_bare_fractions.webp)
+
+![std vs bare tail](std_vs_bare_tail.webp)
+
+![std vs bare sum32](std_vs_bare_sum32.webp)
+
 ![Best-of query](best_query.webp)
 
 ![Best-of dynamic](best_dynamic.webp)

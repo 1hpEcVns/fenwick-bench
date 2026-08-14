@@ -315,23 +315,25 @@ def plot_cpp_vs_rust():
     plt.close(fig)
 
 
-def plot_best_family(cpp, rust, combos, fname, title):
+def plot_best_family(df_a, df_b, combos, fname, title,
+                     label_a="C++23 best", label_b="Rust best",
+                     ratio_label="Rust / C++ best"):
     """Per language take the faster of brute/BIT as 'best', then compare."""
     n = len(combos)
     fig, axes = plt.subplots(2, n, figsize=(4.4 * n, 8.5))
     if n == 1:
         axes = axes.reshape(2, 1)
     for col, (op, mode) in enumerate(combos):
-        c = cpp[(cpp["op"] == op) & (cpp["mode"] == mode)]
-        r = rust[(rust["op"] == op) & (rust["mode"] == mode)]
+        c = df_a[(df_a["op"] == op) & (df_a["mode"] == mode)]
+        r = df_b[(df_b["op"] == op) & (df_b["mode"] == mode)]
         cb = c[["brute_ns", "bit_ns"]].min(axis=1)
         rb = r[["brute_ns", "bit_ns"]].min(axis=1)
 
         ax = axes[0, col]
         ax.plot(c["n"], cb, marker="o", markersize=4, linewidth=1.3,
-                color="#1f77b4", label="C++23 best")
+                color="#1f77b4", label=label_a)
         ax.plot(r["n"], rb, marker="s", markersize=4, linewidth=1.3,
-                ls="--", color="#d62728", label="Rust best")
+                ls="--", color="#d62728", label=label_b)
         ax.set_xscale("log", base=2)
         ax.set_yscale("log")
         ax.set_title(f"{op} / {mode}")
@@ -352,7 +354,7 @@ def plot_best_family(cpp, rust, combos, fname, title):
         ax.set_xscale("log", base=2)
         ax.set_xlabel(xlabel(mode))
         if col == 0:
-            ax.set_ylabel("Rust / C++ best")
+            ax.set_ylabel(ratio_label)
         ax.grid(True, which="both", alpha=0.25)
     fig.suptitle(title, fontsize=14)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
@@ -378,6 +380,47 @@ def best_stats(cpp, rust, combos):
         rows.append((op, mode, gmean, win))
         print(f"{op:<10s} {mode:<12s} {gmean:>12.3f} {win * 100:>9.0f}%")
     return rows
+
+
+def plot_std_vs_bare():
+    """Third comparison: std Rust vs bare no_std Rust (best-of)."""
+    std = load("results_rs.csv")
+    bare = load("results_bare.csv")
+    families = [
+        ([(op, "query") for op in OPS], "std_vs_bare_query.webp",
+         "Best-of brute/BIT: std Rust vs bare no_std Rust (query) + ratio"),
+        (DYNAMIC, "std_vs_bare_dynamic.webp",
+         "Best-of brute/BIT: std Rust vs bare no_std Rust (dynamic) + ratio"),
+        (BISECT, "std_vs_bare_bisect.webp",
+         "Best-of brute/BIT: std Rust vs bare no_std Rust (BIT bisect) + ratio"),
+        (FRACTIONS, "std_vs_bare_fractions.webp",
+         "Best-of brute/BIT: std Rust vs bare no_std Rust (fractions) + ratio"),
+        ([("sum", "query_tail")], "std_vs_bare_tail.webp",
+         "Best-of brute/BIT: std Rust vs bare no_std Rust (tail) + ratio"),
+        (SUM32, "std_vs_bare_sum32.webp",
+         "Best-of brute/BIT: std Rust vs bare no_std Rust (u32 sum) + ratio"),
+    ]
+    all_combos = []
+    for combos, fname, title in families:
+        plot_best_family(std, bare, combos, fname, title,
+                         label_a="std Rust best", label_b="bare Rust best",
+                         ratio_label="bare / std best")
+        all_combos.extend(combos)
+
+    print("\nBest-of (min(brute, BIT)): std Rust vs bare no_std Rust")
+    print(f"{'op':<10s} {'mode':<12s} {'geomean bare/std':>16s} {'bare-win%':>10s}")
+    for op, mode in all_combos:
+        s = std[(std["op"] == op) & (std["mode"] == mode)]
+        b = bare[(bare["op"] == op) & (bare["mode"] == mode)]
+        m = s.merge(b, on="n", suffixes=("_s", "_b"))
+        if m.empty:
+            continue
+        sbest = m[["brute_ns_s", "bit_ns_s"]].min(axis=1)
+        bbest = m[["brute_ns_b", "bit_ns_b"]].min(axis=1)
+        ratio = bbest / sbest
+        gmean = float(np.exp(np.log(ratio).mean()))
+        win = float((ratio < 1.0).mean())
+        print(f"{op:<10s} {mode:<12s} {gmean:>16.3f} {win * 100:>9.0f}%")
 
 
 if __name__ == "__main__":
@@ -408,3 +451,4 @@ if __name__ == "__main__":
         plot_best_family(cpp, rust, combos, fname, title)
         all_combos.extend(combos)
     best_stats(cpp, rust, all_combos)
+    plot_std_vs_bare()
