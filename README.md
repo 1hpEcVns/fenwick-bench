@@ -4,7 +4,9 @@
 多大的 n（或区间长度 L）时，直接暴力比树状数组快”：
 
 - **brute（直接暴力）**：普通数组；修改 `a[i] += d` 是 O(1)；前缀和查询从
-  `0` 循环加到 `i`，区间和查询从 `l` 循环到 `r`。
+  `0` 循环加到 `i`，区间和查询从 `l` 循环到 `r`。源码就是普通 `for` 循环，
+  不手写 intrinsics——编译后 GCC/LLVM 都会自动生成 `vpaddq ymm`（mm256）
+  向量化扫描，见下方「汇编验证」。
 - **BIT（树状数组）**：1-indexed `tree[1..n]`；修改和查询都是标准的
   `lowbit` 循环，O(log n)。
 
@@ -35,6 +37,46 @@ make plot              # 重新测 + 生成 5 张图并输出临界点
 - 位置用 mt19937_64（C++）/ splitmix64 高 32 位（Rust）生成，避免 LCG 在
   2 的幂 n 上出现周期坏数据
 
+## 汇编验证：普通循环已经被自动向量化
+
+动手写 mm256 之前先看了 `-O3 -march=native`（C++23）和
+`-O -C target-cpu=native`（Rust edition 2024）生成的汇编：
+
+**C++（GCC 15.3）**：前缀/区间求和循环自动向量化为单 ymm 累加器，每轮 32 字节：
+
+```asm
+.L3:
+	vpaddq	(%rax), %ymm0, %ymm0
+	addq	$32, %rax
+	cmpq	%rdx, %rax
+	jne	.L3
+	vextracti128	$0x1, %ymm0, %xmm1
+	vpaddq	%xmm0, %xmm1, %xmm0
+	vpsrldq	$8, %xmm0, %xmm1
+	vpaddq	%xmm1, %xmm0, %xmm0
+```
+
+**Rust（LLVM）**：同样自动向量化，而且是 4 个 ymm 累加器，每轮 16 个 u64：
+
+```asm
+	vpaddq	(%rdi,%rax,8), %ymm0, %ymm0
+	vpaddq	32(%rdi,%rax,8), %ymm1, %ymm1
+	vpaddq	64(%rdi,%rax,8), %ymm2, %ymm2
+	vpaddq	96(%rdi,%rax,8), %ymm3, %ymm3
+```
+
+既然普通循环的机器码已经是 mm256，就不需要手写 intrinsics。实测手写 4 累加器
+mm256 版（`_mm256_loadu_si256` + `_mm256_add_epi64`）对比自动向量化版：
+
+| 场景 | 手写 mm256 vs 普通循环 |
+| --- | --- |
+| mixed（n=4..768） | 慢 7–10%（每轮 hsum 和循环结构更差） |
+| query | 基本持平（±2% 噪声） |
+| range，L ≤ 64 | 快 3–5% |
+| range，L ≥ 1024 | 慢 10–17% |
+
+结论：保留普通循环源码，机器码即为 AVX2 mm256；BIT 侧也保持最直接的实现。
+
 ## 本机结果（i9-13950HX，g++ 15.3，rustc 1.94.1）
 
 “临界点”指：`暴力赢的最后一个大小 / BIT 赢的第一个大小`（两者之间是临界带）。
@@ -54,9 +96,9 @@ make plot              # 重新测 + 生成 5 张图并输出临界点
   随 n 的二进制结构有跳变），所以更准确的说法是临界带 n ≈ 8–20。
 - **区间和按长度分界**：L 在 128（C++）/ 192（Rust）以内时直接循环更快，
   再大就轮到 BIT（两次前缀和）赢；这个长度约等于 16–24 条 64B cache line。
-- Rust 与 C++ 的临界点基本一致；Rust 的暴力前缀/区间循环在大 L 上比 C++
-  慢约 10%（LLVM 对 u64 归约的向量化不如 GCC 激进），所以 range 临界点略
-  靠后。mixed/query 两种语言逐点几乎重合。
+- Rust 与 C++ 的临界点基本一致；Rust 的暴力循环在大 L 上与 C++ 接近
+  （约 5–10% 慢，随运行波动），所以 range 临界点略靠后。mixed/query 两种
+  语言逐点几乎重合。
 
 图（WebP）：
 
