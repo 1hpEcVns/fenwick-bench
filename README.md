@@ -119,6 +119,49 @@ bash asm_check.sh      # 自动向量化检查（上面那张表）
 - Rust 与 C++ 临界点基本一致；差异主要在 mixed_75 和 bisect 这类
   修改/扫描交互较强的负载上。
 
+## 最优方案对比：Rust vs C++
+
+对每个 (op, mode, n)，取 `min(brute, BIT)` 作为该语言在那一档的最优耗时
+（“最优方案” = 暴力与 BIT 里更快者），再比较两种语言。表里是
+`Rust_best / C++23_best` 的几何平均（>1 表示 C++ 快），以及 Rust 赢的档位占比：
+
+| 操作 / 模式 | geomean Rust/C++ | Rust 赢的档位 |
+| --- | ---: | ---: |
+| sum / query | 1.137 | 2% |
+| min / query | 1.054 | 36% |
+| max / query | 1.137 | 2% |
+| and / query | 1.148 | 4% |
+| or / query | 1.083 | 7% |
+| xor / query | 1.099 | 9% |
+| sum / mixed | 1.128 | 7% |
+| sum / range | 1.052 | 16% |
+| xor / mixed | 1.078 | 7% |
+| xor / range | 1.073 | 3% |
+| sum_bisect / mixed | 1.067 | 7% |
+| sum_bisect / query | 1.072 | 16% |
+| sum / mixed_25 | 1.142 | 7% |
+| sum / mixed_75 | 1.137 | 11% |
+| sum / query_tail | 1.148 | 4% |
+| sum32 / query | 1.125 | 2% |
+| sum32 / mixed | 1.043 | 7% |
+| sum32 / range | 1.052 | 31% |
+
+结论：本机（i9-13950HX，g++ 15.3 vs rustc 1.94.1，均 -O3/native）上 C++23
+的最优方案整体快 4–15%，没有任何模式 Rust 系统性地反超；Rust 赢面最大的是
+min 前缀查询（36% 档位）和 sum32 range（31% 档位），但都不到一半。
+
+![Best-of query](best_query.webp)
+
+![Best-of dynamic](best_dynamic.webp)
+
+![Best-of bisect](best_bisect.webp)
+
+![Best-of fractions](best_fractions.webp)
+
+![Best-of tail](best_tail.webp)
+
+![Best-of sum32](best_sum32.webp)
+
 图（WebP）：
 
 ![C++23 query](cpp23_query.webp)
