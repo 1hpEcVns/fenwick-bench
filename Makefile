@@ -1,4 +1,4 @@
-.PHONY: all bench bench-rs bench-bare bench-all bench-run bench-run-rs bench-run-bare plot asm-check
+.PHONY: all bench bench-rs bench-bare bench-nested-rs bench-all bench-run bench-run-rs bench-run-bare bench-run-nested plot asm-check
 
 CXX ?= g++
 CXXFLAGS ?= -O3 -march=native -std=c++23
@@ -17,6 +17,9 @@ bench-bare: bench_no_std.rs
 		-C link-arg=-nostartfiles -C link-arg=-static -C link-arg=-no-pie \
 		-C link-arg=-fuse-ld=bfd bench_no_std.rs -o bench_bare
 
+bench-nested-rs: bench_nested_brute.rs
+	$(RUSTC) --edition=2024 -O -C target-cpu=native bench_nested_brute.rs -o bench_nested_rs
+
 bench-run: bench
 	taskset -c 0 ./bench > results.csv
 
@@ -25,6 +28,9 @@ bench-run-rs: bench-rs
 
 bench-run-bare: bench-bare
 	taskset -c 0 ./bench_bare > results_bare.csv
+
+bench-run-nested: bench-nested-rs
+	taskset -c 0 ./bench_nested_rs > results_nested_rs.csv
 
 bench-all: bench-run bench-run-rs
 

@@ -313,4 +313,49 @@ rdtsc 换算误差和静态内存布局），没有额外运行时开销；个�
 ![C++23 vs Rust sum32](cpp_vs_rust_sum32.webp)
 
 原始数据：`results.csv`（C++23）、`results_rs.csv`（Rust），列为
-`op,mode,n,brute_ns,bit_ns`。
+`op,mode,n,brute_ns,bit_ns`；`results_nested_rs.csv`（嵌套分块，见下），
+列为 `op,mode,n,b,brute_ns,bit_ns,nested_ns`。
+
+## 第四项：上层 Fenwick + 下层暴力（嵌套分块）
+
+新增 `bench_nested_brute.rs`，测试一种两层混合结构能否同时拿到暴力的
+“块内小范围扫描”优势和 BIT 的“跨块聚合”优势：
+
+- **上层**：把数组切成大小为 B 的块，块聚合值存在一个 Fenwick 里
+  （长度 nb = ⌈n/B⌉）；
+- **下层**：块内元素仍是普通数组，前缀查询只对最后一个不完整块暴力扫描
+  （≤ B 个元素）；
+- 前缀查询 O(log nb + B)，单点修改 O(log nb)（sum/xor 可逆，直接改块聚合）。
+
+与纯暴力、纯 BIT 对比：sum/xor × query / mixed(50%) / mixed_25 / mixed_75，
+n 从 4 到 2^20（45 档），B ∈ {2, 4, ..., 512}（9 档）；每个 (n, B) 先
+验证嵌套结果与 BIT（小 n 再叠加暴力）一致，再按 9 轮中位数计时。
+
+本机结果（重跑后，sum 与 xor 曲线一致；B 为“同时快于暴力与 BIT”的档位）：
+
+| op / mode | 嵌套全胜的 n 数量 | 最佳 B | 相对最优方案的加速 |
+| --- | ---: | --- | --- |
+| sum / query | 3/45 | 2–8 | 1.14–1.91x（n ≥ 524288） |
+| sum / mixed_25 | 4/45 | 2–4 | 1.05–1.55x |
+| sum / mixed(50%) | 4/45 | 2–8 | 1.15–1.96x |
+| sum / mixed_75 | 5/45 | 4–16 | 1.08–2.32x |
+| xor / query | 4/45 | 2–4 | 1.09–1.82x |
+| xor / mixed_25 | 3/45 | 4–8 | 1.12–1.86x |
+| xor / mixed(50%) | 4/45 | 4–16 | 1.11–2.41x |
+| xor / mixed_75 | 6/45 | 4–16 | 1.01–2.45x |
+
+结论：
+
+- **确实存在嵌套更快的区间，但只在大 n（本机约 n ≥ 393216–524288 起）**，
+  且块必须很小（B = 2–16，多数取 4）。机理是上层 Fenwick 数组缩小 B 倍，
+  在 BIT 数组开始超出缓存舒适区时重新变小，而块内 ≤ B 个元素的暴力扫描
+  成本很低。
+- 中等及小 n 仍是纯 BIT 赢；极高更新占比 + 极小 n 仍是纯暴力赢。
+- xor / mixed_75 在 n=3072 的 1.01x 属噪声量级，不作结论。
+- 首轮跑测时 xor 档位出现过周期性的纯 BIT 尖峰（同规模 14ns ↔ 167ns），
+  重跑后消失且与 sum 一致；共享机上长基准以重跑为准。
+
+```bash
+make bench-run-nested        # taskset -c 0 ./bench_nested_rs > results_nested_rs.csv
+./bench_nested_rs xor mixed_75   # 支持只跑某个 op/mode，用于复测
+```
